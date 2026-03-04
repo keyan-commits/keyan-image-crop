@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cropper">
+<title>Invoice Cropper</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;padding:20px;max-width:600px;margin:0 auto;-webkit-user-select:none;user-select:none}
+h1{font-size:24px;margin-bottom:8px}
+.sub{color:#666;font-size:14px;margin-bottom:24px}
+.upload{background:#fff;border:2px dashed #ccc;border-radius:16px;padding:40px 20px;text-align:center;margin-bottom:16px;cursor:pointer}
+.upload p:first-child{font-size:18px;margin-bottom:8px}
+.upload .hint{color:#999;font-size:13px}
+input[type=file]{display:none}
+.btn{display:block;width:100%;padding:14px;border-radius:12px;border:none;font-size:16px;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;color:#fff;margin-top:8px}
+.btn-blue{background:#007aff}
+.btn-green{background:#34c759;margin-top:16px}
+.btn-red{background:#ff3b30;margin-top:12px}
+.btn:disabled{background:#ccc}
+.count{margin:12px 0;font-size:14px;color:#333}
+.results{margin-top:24px}
+.card{background:#fff;border-radius:12px;padding:12px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.card img{width:100%;border-radius:8px}
+.card .name{font-size:13px;color:#666;margin-top:8px}
+.info{border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:14px;text-align:center}
+.info-green{background:#e8f5e9;color:#2e7d32}
+.info-gray{background:#fff;color:#666;font-size:13px;line-height:1.6;text-align:left}
+.spinner{display:none;margin:20px auto;width:40px;height:40px;border:4px solid #eee;border-top:4px solid #007aff;border-radius:50%;animation:spin .8s linear infinite}
+.spinner.on{display:block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.status{text-align:center;color:#666;font-size:14px;margin-bottom:12px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<h1>Invoice Cropper</h1>
+<p class="sub">Select invoice screenshots to crop</p>
+
+<div id="upSec">
+  <div class="upload" onclick="document.getElementById('fi').click()">
+    <p>Tap to select screenshots</p>
+    <p class="hint">PNG or JPG</p>
+  </div>
+  <input type="file" id="fi" multiple accept="image/*">
+  <div class="count" id="cnt"></div>
+  <button class="btn btn-blue" id="cropBtn" disabled onclick="run()">Crop Images</button>
+</div>
+
+<div class="spinner" id="sp"></div>
+<p class="status" id="st"></p>
+
+<div class="results" id="res">
+  <div class="info info-green hide" id="doneMsg"></div>
+  <a class="btn btn-green hide" id="dlBtn" href="#">Download All as ZIP</a>
+  <div class="info info-gray hide" id="steps">
+    After downloading: Open <strong>Files</strong> app → find the ZIP →
+    tap to unzip → select all images → tap <strong>Share</strong> → <strong>Save to Photos</strong>
+  </div>
+</div>
+
+<button class="btn btn-red hide" id="rstBtn" onclick="reset()">Crop More</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const fi=document.getElementById('fi'),cnt=document.getElementById('cnt'),
+  cropBtn=document.getElementById('cropBtn'),sp=document.getElementById('sp'),
+  st=document.getElementById('st'),res=document.getElementById('res'),
+  doneMsg=document.getElementById('doneMsg'),dlBtn=document.getElementById('dlBtn'),
+  steps=document.getElementById('steps'),upSec=document.getElementById('upSec'),
+  rstBtn=document.getElementById('rstBtn');
+
+fi.addEventListener('change',()=>{
+  const n=fi.files.length;
+  cnt.textContent=n>0?n+' screenshot'+(n>1?'s':'')+' selected':'';
+  cropBtn.disabled=n===0;
+});
+
+function loadImage(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>{const img=new Image();img.onload=()=>res(img);img.onerror=rej;img.src=r.result};
+    r.onerror=rej;r.readAsDataURL(file);
+  });
+}
+
+function getGray(img){
+  const c=document.createElement('canvas');
+  c.width=img.width;c.height=img.height;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(img,0,0);
+  const d=ctx.getImageData(0,0,c.width,c.height).data;
+  const g=new Uint8Array(c.width*c.height);
+  for(let i=0;i<g.length;i++) g[i]=Math.round(d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114);
+  return {gray:g,w:c.width,h:c.height};
+}
+
+function findContentZone(gray,w,h){
+  let top=0,bot=h-1;
+  for(let r=0;r<h;r++){let s=0;for(let c=0;c<w;c++)s+=gray[r*w+c];if(s/w>200){top=r;break;}}
+  for(let r=h-1;r>=0;r--){let s=0;for(let c=0;c<w;c++)s+=gray[r*w+c];if(s/w>200){bot=r;break;}}
+  return [top,bot];
+}
+
+function findContiguousBlocks(mask){
+  const blocks=[];let start=null;
+  for(let i=0;i<mask.length;i++){
+    if(mask[i]&&start===null)start=i;
+    else if(!mask[i]&&start!==null){blocks.push([start,i-1]);start=null;}
+  }
+  if(start!==null)blocks.push([start,mask.length-1]);
+  return blocks;
+}
+
+function largestBlock(mask){
+  const b=findContiguousBlocks(mask);
+  if(!b.length)return null;
+  return b.reduce((a,c)=>(c[1]-c[0]>a[1]-a[0]?c:a));
+}
+
+function findCardColumns(gray,w,zt,zb,thresh,ratio){
+  const zh=zb-zt+1;
+  const frac=new Float32Array(w);
+  for(let c=0;c<w;c++){let cnt=0;for(let r=zt;r<=zb;r++)if(gray[r*w+c]>thresh)cnt++;frac[c]=cnt/zh;}
+  const mask=new Uint8Array(w);
+  for(let c=0;c<w;c++)mask[c]=frac[c]>ratio?1:0;
+  const b=largestBlock(mask);
+  if(!b)return null;
+  return b;
+}
+
+function findCardRows(gray,w,zt,zb,left,right,thresh,ratio){
+  const cw=right-left+1,zh=zb-zt+1;
+  const frac=new Float32Array(zh);
+  for(let r=0;r<zh;r++){let cnt=0;for(let c=left;c<=right;c++)if(gray[(zt+r)*w+c]>thresh)cnt++;frac[r]=cnt/cw;}
+  const mask=new Uint8Array(zh);
+  for(let r=0;r<zh;r++)mask[r]=frac[r]>ratio?1:0;
+  const b=largestBlock(mask);
+  if(!b)return null;
+  return [zt+b[0],zt+b[1]];
+}
+
+function trimTop(gray,w,cardTop,cardBot,left,right){
+  const pw=253;
+  for(let r=cardTop;r<cardTop+(cardBot-cardTop)/4;r++){
+    const row=[];for(let c=left;c<=right;c++)row.push(gray[r*w+c]);
+    row.sort((a,b)=>a-b);
+    const p5=row[Math.floor(row.length*0.05)];
+    if(p5>=pw)return r;
+  }
+  return cardTop;
+}
+
+function trimSides(gray,w,trimmedTop,left,right){
+  const pw=253;
+  let tl=left,tr=right;
+  // Scan from left
+  let inShadow=false;
+  for(let c=left;c<=right;c++){
+    const v=gray[trimmedTop*w+c];
+    if(!inShadow&&v<pw)inShadow=true;
+    else if(inShadow&&v>=pw){tl=c;break;}
+  }
+  // Scan from right
+  inShadow=false;
+  for(let c=right;c>=left;c--){
+    const v=gray[trimmedTop*w+c];
+    if(!inShadow&&v<pw)inShadow=true;
+    else if(inShadow&&v>=pw){tr=c;break;}
+  }
+  return [tl,tr];
+}
+
+function trimBottom(gray,w,cardTop,cardBot,left,right){
+  const cw=right-left+1,ch=cardBot-cardTop+1;
+  let lastRow=-1;
+  for(let r=0;r<ch;r++){
+    let cnt=0;
+    for(let c=left;c<=right;c++)if(gray[(cardTop+r)*w+c]<200)cnt++;
+    if(cnt/cw>0.005)lastRow=r;
+  }
+  if(lastRow<0)return cardBot;
+  const margin=Math.floor(ch*0.03);
+  return Math.min(cardBot,cardTop+lastRow+margin);
+}
+
+function detectAndCrop(img){
+  const {gray,w,h}=getGray(img);
+  const [zt,zb]=findContentZone(gray,w,h);
+  const cols=findCardColumns(gray,w,zt,zb,250,0.15);
+  if(!cols)throw new Error('Could not detect card');
+  const [left,right]=cols;
+  const rows=findCardRows(gray,w,zt,zb,left,right,250,0.10);
+  if(!rows)throw new Error('Could not detect card rows');
+  const [cardTop,cardBot]=rows;
+  const tTop=trimTop(gray,w,cardTop,cardBot,left,right);
+  const tBot=trimBottom(gray,w,cardTop,cardBot,left,right);
+  const [tLeft,tRight]=trimSides(gray,w,tTop,left,right);
+
+  const cw=tRight-tLeft+1,ch=tBot-tTop+1;
+  const c=document.createElement('canvas');
+  c.width=cw;c.height=ch;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(img,tLeft,tTop,cw,ch,0,0,cw,ch);
+  return c;
+}
+
+function canvasToBlob(canvas,quality){
+  return new Promise(r=>canvas.toBlob(b=>r(b),'image/jpeg',quality||0.95));
+}
+
+async function run(){
+  cropBtn.disabled=true;
+  sp.classList.add('on');
+  st.textContent='Cropping...';
+
+  const files=Array.from(fi.files);
+  const results=[];
+
+  for(const f of files){
+    try{
+      const img=await loadImage(f);
+      const canvas=detectAndCrop(img);
+      const blob=await canvasToBlob(canvas,0.95);
+      const name=f.name.replace(/\.[^.]+$/,'')+'_cropped.jpg';
+      results.push({name,blob,canvas,success:true});
+    }catch(e){
+      results.push({name:f.name,success:false,error:e.message});
+    }
+  }
+
+  sp.classList.remove('on');
+  const ok=results.filter(r=>r.success);
+  st.textContent=ok.length+' image'+(ok.length>1?'s':'')+' cropped!';
+  doneMsg.textContent=ok.length+' cropped invoice'+(ok.length>1?'s':'')+' ready';
+  doneMsg.classList.remove('hide');
+  upSec.classList.add('hide');
+  rstBtn.classList.remove('hide');
+
+  // Show previews
+  for(const r of results){
+    const card=document.createElement('div');card.className='card';
+    if(r.success){
+      const img=document.createElement('img');img.src=r.canvas.toDataURL('image/jpeg',0.95);
+      card.appendChild(img);
+      const nm=document.createElement('p');nm.className='name';nm.textContent=r.name;
+      card.appendChild(nm);
+    }else{
+      card.innerHTML='<p style="color:#ff3b30">Failed: '+r.name+' — '+r.error+'</p>';
+    }
+    res.appendChild(card);
+  }
+
+  // Build ZIP
+  if(ok.length>0){
+    const zip=new JSZip();
+    for(const r of ok){
+      const buf=await r.blob.arrayBuffer();
+      zip.file(r.name,buf);
+    }
+    const zblob=await zip.generateAsync({type:'blob'});
+    const url=URL.createObjectURL(zblob);
+    dlBtn.href=url;
+    dlBtn.download='cropped_invoices.zip';
+    dlBtn.classList.remove('hide');
+    steps.classList.remove('hide');
+  }
+
+  cropBtn.disabled=false;
+}
+
+function reset(){
+  res.querySelectorAll('.card').forEach(c=>c.remove());
+  doneMsg.classList.add('hide');
+  dlBtn.classList.add('hide');
+  steps.classList.add('hide');
+  rstBtn.classList.add('hide');
+  upSec.classList.remove('hide');
+  fi.value='';cnt.textContent='';
+  cropBtn.disabled=true;st.textContent='';
+}
+</script>
+</body>
+</html>

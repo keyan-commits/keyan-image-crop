@@ -10,6 +10,8 @@ Auto-detect and crop invoice cards from mobile app screenshots. Strips status ba
 
 ## Quick Start
 
+### macOS / Linux
+
 ```bash
 # Install dependencies
 pip3 install -r requirements.txt
@@ -17,6 +19,18 @@ pip3 install -r requirements.txt
 # Put screenshots in ./invoices, crop to ./output
 python3 crop_invoices.py -i ./invoices -o ./output
 ```
+
+### Windows
+
+```powershell
+# Install dependencies
+pip install -r requirements.txt
+
+# Put screenshots in .\invoices, crop to .\output
+python crop_invoices.py -i .\invoices -o .\output
+```
+
+> **Note:** If `python` is not recognized on Windows, ensure Python is added to your PATH during installation, or use `py` instead (e.g. `py crop_invoices.py`).
 
 ## Options
 
@@ -43,9 +57,18 @@ python3 crop_invoices.py -i ./invoices -o ./output
 
 ## Tests
 
+### macOS / Linux
+
 ```bash
 pip3 install pytest
 python3 -m pytest test_crop_invoices.py -v
+```
+
+### Windows
+
+```powershell
+pip install pytest
+python -m pytest test_crop_invoices.py -v
 ```
 
 ## Supported Formats
